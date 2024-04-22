@@ -1,5 +1,4 @@
 # tremont
-Obfuscated, reliable transport over RTP 
 
 RTP seems to be an unexplored transport for offensive security implants.
 
