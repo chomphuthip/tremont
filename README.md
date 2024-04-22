@@ -1,7 +1,7 @@
 # tremont
 Obfuscated, reliable transport over RTP 
 
-RTP seems to be an unexplored transport for red team security implants.
+RTP seems to be an unexplored transport for offensive security implants.
 
 S/RTP has some interesting properties that makes it seem like a good medium:
 * SRTP is a profile of RTP. Having SRTP being a profile of RTP rather than a whole different type of packet makes it hard to identify which if data is encrypted.
