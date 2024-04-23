@@ -6,7 +6,6 @@
 #include <deque>
 #include <chrono>
 
-
 #include <Winsock2.h>
 #include <stdint.h>
 #include <time.h>
@@ -14,6 +13,8 @@
 #pragma comment(lib, "Ws2_32.lib")
 
 #include "tremont.h"
+
+#include <iostream>
 
 /*
 	Rules:
@@ -29,7 +30,7 @@ class byte_stream {
 			for (size_t i = 0; i < size; i++) { _data.push_back(src[i]); }
 		}
 
-		size_t read(byte* dest, size_t n) {
+		int read(byte* dest, size_t n) {
 			size_t left_in_queue = _data.size();
 			size_t to_read = (n > left_in_queue) ? n : left_in_queue;
 
@@ -38,7 +39,7 @@ class byte_stream {
 				dest[i] = _data.front(); 
 				_data.pop_front();
 			}
-			return i;
+			return static_cast<int>(i);
 		}
 
 		size_t size() {
@@ -137,8 +138,8 @@ bool _stream_exists(stream_id id, Nexus* nexus);
 /*
 	TODO: Add error checking;
 */
-int tremont_init_nexus(Nexus* new_nexus) {
-	new_nexus = new Nexus;
+int tremont_init_nexus(Nexus** new_nexus) {
+	*new_nexus = new Nexus;
 	return 0;
 }
 
@@ -184,33 +185,45 @@ int tremont_req_stream(stream_id id, sockaddr* addr, uint32_t timeout, Nexus* ne
 	nexus->desired_streams.insert(id);
 	desired_streams_lock.unlock();
 
-	std::chrono::duration<int> _timeout(timeout);
-	bool timed_out;
+	if (timeout == 0) {
+		_send_stream_syn(id, addr, nexus);
+		std::unique_lock<std::mutex> fufilled_streams_lock(nexus->fufilled_streams_mu);
+		nexus->fufilled_streams_cv.wait(fufilled_streams_lock,
+			[&nexus, id] { return nexus->fufilled_streams.count(id) > 0; });
+		return 0;
+	}
+	std::chrono::duration<uint32_t> _timeout(timeout);
+	bool fufilled_in_time;
 
 	std::unique_lock<std::mutex> fufilled_streams_lock(nexus->fufilled_streams_mu);
 	_send_stream_syn(id, addr, nexus);
-	timed_out = nexus->fufilled_streams_cv.wait_for(fufilled_streams_lock,
+	fufilled_in_time = nexus->fufilled_streams_cv.wait_for(fufilled_streams_lock,
 		_timeout,
 		[&nexus, id] { return nexus->fufilled_streams.count(id) > 0; });
-	if (timeout) return -1;
+	if (!fufilled_in_time) return -1;
 	
-	nexus->fufilled_streams.erase(id);
 	return 0;
 }
 
-int tremont_accept_stream(stream_id id, sockaddr_in* addr, uint32_t timeout, Nexus* nexus) {
+int tremont_accept_stream(stream_id id, uint32_t timeout, Nexus* nexus) {
 	std::unique_lock<std::mutex> desired_streams_lock(nexus->desired_streams_mu);
 	nexus->desired_streams.insert(id);
 	desired_streams_lock.unlock();
 
-	std::chrono::duration<int> _timeout(timeout);
-	bool timed_out;
+	if (timeout == 0) {
+		std::unique_lock<std::mutex> fufilled_streams_lock(nexus->fufilled_streams_mu);
+		nexus->fufilled_streams_cv.wait(fufilled_streams_lock,
+			[&nexus, id] { return nexus->fufilled_streams.count(id) > 0; });
+		return 0;
+	}
+	std::chrono::duration<uint32_t> _timeout(timeout);
+	bool fufilled_in_time;
 
 	std::unique_lock<std::mutex> fufilled_streams_lock(nexus->fufilled_streams_mu);
-	timed_out = nexus->fufilled_streams_cv.wait_for(fufilled_streams_lock,
+	fufilled_in_time = nexus->fufilled_streams_cv.wait_for(fufilled_streams_lock,
 		_timeout,
 		[&nexus, id] { return nexus->fufilled_streams.count(id) > 0; });
-	if (timeout) return -1;
+	if (!fufilled_in_time) return -1;
 
 	return 0;
 }
@@ -236,8 +249,7 @@ int tremont_recv(stream_id id, byte* buf, size_t len, Nexus* nexus) {
 	std::unique_lock<std::mutex> data_lock(*stream->data_from_mu);
 	stream->data_from_cv->wait(data_lock,
 		[stream, len] { return stream->data_from.size() < len; });
-	stream->data_from.read(buf, len);
-	return 0;
+	return stream->data_from.read(buf, len);
 }
 
 bool _stream_exists(stream_id id, Nexus* nexus) {
@@ -261,7 +273,6 @@ bool _stream_exists(stream_id id, Nexus* nexus) {
 #define DATA_ACK    0x04
 #define CTRL_ACK    0x05
 
-
 #define MAX_RECV 1440
 #define RTP_HLEN 12
 
@@ -271,18 +282,25 @@ void _nexus_syn(byte* raw, int bytes_in, sockaddr* remote_addr, Nexus* nexus);
 void _nexus_ctrl_ack(byte* raw, int bytes_in, sockaddr* remote_addr, Nexus* nexus);
 void _nexus_fin(byte* raw, int bytes_in, Nexus* nexus);
 void _nexus_xor_trans(byte* data, size_t len, Nexus* nexus);
+void _set_blocking(SOCKET socket, bool mode);
 
 void _nexus_thread(Nexus* nexus) {
 	char buffer[MAX_RECV];
 	byte* data = (byte*)(buffer + RTP_HLEN);
 	sockaddr remote_addr;
-	int remote_addr_len = sizeof(sockaddr_in);
+	int remote_addr_len = sizeof(sockaddr);
+	ZeroMemory(&remote_addr, remote_addr_len);
 	int bytes_in;
+	_set_blocking(nexus->socket, false);
 
 	while (nexus->thread_ctrl == 0x1) {
 		bytes_in = recvfrom(nexus->socket, buffer, MAX_RECV, 0,
 			&remote_addr, &remote_addr_len);
-		if(bytes_in < 0) { /* something went wrong*/ }
+		if (bytes_in < 0) {
+			if (WSAGetLastError() == WSAEWOULDBLOCK) { continue; }
+			std::cerr << WSAGetLastError() << std::endl;
+			return;
+		}
 		_nexus_xor_trans(data, bytes_in - RTP_HLEN, nexus);
 		uint32_t opcode = (uint32_t)data[0];
 		switch (opcode) {
@@ -447,6 +465,11 @@ void _nexus_xor_trans(byte* data, size_t len, Nexus* nexus) {
 	}
 }
 
+void _set_blocking(SOCKET sock, bool mode) {
+	u_long mode_code = mode ? 0 : 1;
+	ioctlsocket(sock, FIONBIO, &mode_code);
+}
+
 char* _craft_rtp_pkt(byte* data, size_t data_len, size_t* res_size_out, Nexus* nexus) {
 	*res_size_out = data_len + sizeof(rtp_header_t);
 	byte* result = (byte*)malloc(*res_size_out);
@@ -484,11 +507,18 @@ void _send_stream_syn(stream_id id, sockaddr* addr, Nexus* nexus) {
 
 		free(rtp_pkt);
 
+		//_set_blocking(nexus->socket, false);
+
 		bytes_in = recvfrom(nexus->socket, temp, MAX_RECV, 0,
 			&remote_addr, &remote_addr_len);
+
+		//_set_blocking(nexus->socket, true);
 		
-		if(bytes_in < 0) { /* oopsies */ }
-		//if (!_matching_addr(remote_addr, *addr)) continue;
+		if (bytes_in < 0) {
+			if (WSAGetLastError() == WSAEWOULDBLOCK) { continue; }
+			std::cerr << WSAGetLastError() << std::endl;
+			return;
+		}
 		
 		_nexus_xor_trans((byte*)(temp + RTP_HLEN), 
 			(size_t)(bytes_in - RTP_HLEN), nexus);

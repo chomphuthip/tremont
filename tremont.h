@@ -13,7 +13,7 @@ typedef stream_id tremont_stream_id;
 /*
 	Create a nexus.
 */
-int tremont_init_nexus(Tremont_Nexus* new_nexus);
+int tremont_init_nexus(Tremont_Nexus** new_nexus);
 
 /*
 	Sets the key that the nexus will use.
@@ -42,15 +42,15 @@ int tremont_destroy_nexus(Tremont_Nexus* nexus);
 
 /*
 	Sends a stream request to a remote nexus.
-	Blocks until timeout.
+	Blocks until timeout. If timeout = 0, blocks until someone requests
 */
-int tremont_req_stream(tremont_stream_id id, sockaddr_in* addr, uint32_t timeout, Tremont_Nexus* nexus);
+int tremont_req_stream(tremont_stream_id id, sockaddr* addr, uint32_t timeout, Tremont_Nexus* nexus);
 
 /*
 	Accepts a stream from the nexus.
 	Blocks until timeout.
 */
-int tremont_accept_stream(tremont_stream_id id, sockaddr_in* addr, uint32_t timeout, Tremont_Nexus* nexus);
+int tremont_accept_stream(tremont_stream_id id, uint32_t timeout, Tremont_Nexus* nexus);
 
 /*
 	Ends a stream.
