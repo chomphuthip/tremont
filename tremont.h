@@ -1,16 +1,13 @@
 // tremont: Sneaky, Reliable Streaming over RTP
 #pragma once
 
+#include<WinSock2.h>
 #include<stdint.h>
 
-#include<WinSock2.h>
-
-
-/*
-	Bound to a UDP socket.
-	Manages streams.
-*/
+typedef struct _Nexus Nexus;
 typedef Nexus Tremont_Nexus;
+
+typedef uint32_t stream_id;
 typedef stream_id tremont_stream_id;
 
 /*
