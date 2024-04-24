@@ -26,8 +26,7 @@ int main() {
     int addrInfoResult = getaddrinfo("127.0.0.1", "9999", &hints, &result);
     if (addrInfoResult != 0) {
         std::cerr << "bad addr" << std::endl;
-        freeaddrinfo(result);
-        WSACleanup();
+        std::cin.get();
         return 1;
     }
 
@@ -35,8 +34,7 @@ int main() {
     SOCKET sock = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
     if (sock == INVALID_SOCKET) {
         std::cerr << "bad socket" << std::endl;
-        freeaddrinfo(result);
-        WSACleanup();
+        std::cin.get();
         return 1;
     }
     
@@ -44,9 +42,7 @@ int main() {
     int bindResult = bind(sock, result->ai_addr, (int)result->ai_addrlen);
     if (bindResult == SOCKET_ERROR) {
         std::cerr << "bad bind" << std::endl;
-        closesocket(sock);
-        freeaddrinfo(result);
-        WSACleanup();
+        std::cin.get();
         return 1;
 
     }
@@ -58,9 +54,7 @@ int main() {
     res = tremont_init_nexus(&nexus);
     if (res != 0) {
         std::cerr << "couldn't init nexus" << std::endl;
-        freeaddrinfo(result);
-        closesocket(sock);
-        WSACleanup();
+        std::cin.get();
         return 1;
     }
 
@@ -68,9 +62,7 @@ int main() {
     res = tremont_bind_nexus(sock, nexus);
     if (res != 0) {
         std::cerr << "couldn't bind nexus" << std::endl;
-        freeaddrinfo(result);
-        closesocket(sock);
-        WSACleanup();
+        std::cin.get();
         return 1;
     }
     std::cout << "Nexus bound!" << std::endl;
@@ -92,9 +84,7 @@ int main() {
     byte* data = (byte*)malloc(res);
     if (data == 0) {
         std::cerr << "unable to malloc memory for data" << std::endl;
-        freeaddrinfo(result);
-        closesocket(sock);
-        WSACleanup();
+        std::cin.get();
         return 1;
     }
     std::cout << "Recieved data:" << std::endl;
@@ -107,9 +97,7 @@ int main() {
     res = tremont_send(9999, msg, 32, nexus);
     if (res == -1) {
         std::cerr << "ack timeout" << std::endl;
-        freeaddrinfo(result);
-        closesocket(sock);
-        WSACleanup();
+        std::cin.get();
         return 1;
     }
 
