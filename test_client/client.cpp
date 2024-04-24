@@ -73,6 +73,8 @@ int main() {
         return 1;
     }
 
+    std::cout << "Nexus bound!" << std::endl;
+
     //get remote addrinfo
     struct addrinfo remote_hint, *remote_info;
     memset(&remote_hint, 0, sizeof(remote_hint));
@@ -87,18 +89,15 @@ int main() {
         return 1;
     }
 
-
-    std::cout << "requesting a stream" << std::endl;
     //request the stream
-    res = tremont_req_stream(9999, remote_info->ai_addr, 5, nexus);
+    res = tremont_req_stream(9999, remote_info->ai_addr, 0, nexus);
     if (res == -1) {
         std::cerr << "req timeout" << std::endl;
         freeaddrinfo(result);
         WSACleanup();
         return 1;
     }
-
-    std::cout << "got a stream" << std::endl;
+    std::cout << "Connected!" << std::endl;
 
     byte msg[16] = "Sending tone...";
 
@@ -112,7 +111,7 @@ int main() {
 
     byte temp[99];
     ZeroMemory(temp, 99);
-    res = tremont_recv(9999, temp, 99, nexus);
+    res = tremont_recv(9999, temp, 32, nexus);
     byte* data = (byte*)malloc(res);
     if (data == 0) {
         std::cerr << "unable to malloc memory for data" << std::endl;
@@ -120,6 +119,7 @@ int main() {
         WSACleanup();
         return 1;
     }
+    std::cout << "Recieved data:" << std::endl;
     memcpy(data, temp, res);
     std::cout << data << std::endl;
     free(data);
@@ -130,5 +130,6 @@ int main() {
     freeaddrinfo(result);
     WSACleanup();
 
+    std::cin.get();
     return 0;
 }
