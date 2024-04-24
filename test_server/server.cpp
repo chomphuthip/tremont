@@ -73,6 +73,7 @@ int main() {
         WSACleanup();
         return 1;
     }
+    std::cout << "Nexus bound!" << std::endl;
 
     //accept a stream request
     res = 1;
@@ -82,13 +83,12 @@ int main() {
         res = tremont_accept_stream(9999, 5, nexus);
     }
     */
-    std::cout << "Blocking until another nexus SYNs" << std::endl;
     tremont_accept_stream(9999, 0, nexus);
-
+    std::cout << "Connected!" << std::endl;
 
     byte temp[99];
     ZeroMemory(temp, 99);
-    res = tremont_recv(9999, temp, 99, nexus);
+    res = tremont_recv(9999, temp, 16, nexus);
     byte* data = (byte*)malloc(res);
     if (data == 0) {
         std::cerr << "unable to malloc memory for data" << std::endl;
@@ -97,6 +97,7 @@ int main() {
         WSACleanup();
         return 1;
     }
+    std::cout << "Recieved data:" << std::endl;
     memcpy(data, temp, res);
     std::cout << data << std::endl;
     free(data);
@@ -119,5 +120,6 @@ int main() {
     closesocket(sock);
     WSACleanup();
 
+    std::cin.get();
     return 0;
 }
