@@ -58,7 +58,6 @@ int main() {
         return 1;
     }
 
-
     //bind nexus to port
     res = tremont_bind_nexus(sock, nexus);
     if (res != 0) {
@@ -68,6 +67,9 @@ int main() {
     }
 
     std::cout << "Nexus bound!" << std::endl;
+
+    char key[] = "lets learn about IELR(1) parser generators";
+    tremont_key_nexus(key, 43, nexus);
 
     //get remote addrinfo
     struct addrinfo remote_hint, *remote_info;
