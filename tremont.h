@@ -1,4 +1,4 @@
-// tremont: Sneaky, Reliable Streaming over RTP
+// tremont: Obfuscated, Reliable Streaming over RTP
 #pragma once
 
 #include<WinSock2.h>

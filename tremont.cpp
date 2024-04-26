@@ -115,7 +115,7 @@ typedef struct _Nexus {
 
 	std::unordered_map<stream_id, std::atomic<block_id>> ack_tracker;
 
-	rtp_header_t rtp_header = { 0 };
+	rtp_header_t rtp_header = { 0, 0, 2, 0, 0, 98, 1, 0, 99 };
 	
 	std::atomic<byte* > key = NULL;
 	std::atomic<size_t> key_len = 0;
@@ -123,6 +123,7 @@ typedef struct _Nexus {
 
 	SOCKET socket = NULL;
 	std::mutex socket_mu;
+	std::atomic<uint32_t> seq_num = 1;
 
 	/*
 		polled by the nexus thread
@@ -161,6 +162,18 @@ void _xor_trans(byte* data, size_t len, Nexus* nexus);
 */
 int tremont_init_nexus(Nexus** new_nexus) {
 	*new_nexus = new Nexus;
+
+	Nexus* nexus = *new_nexus;
+	nexus->rtp_header.version = 2;
+	nexus->rtp_header.P = 0;
+	nexus->rtp_header.X = 0;
+	nexus->rtp_header.CC = 0;
+	nexus->rtp_header.M = 0;
+	nexus->rtp_header.PT = 98;
+	nexus->rtp_header.seq_num = 1;
+	nexus->rtp_header.TS = 1;
+	nexus->rtp_header.ssrc = 0x2;
+
 	return 0;
 }
 
@@ -600,6 +613,13 @@ char* _craft_rtp_pkt(byte* data, size_t data_len, size_t* res_size_out, Nexus* n
 	*res_size_out = sizeof(rtp_header_t) + data_len + packing;
 	byte* result = (byte*)malloc(*res_size_out);
 	if (result == NULL) return NULL;
+
+	nexus->rtp_header.TS = htonl(static_cast<uint32_t>(
+		std::chrono::duration_cast<std::chrono::nanoseconds>(
+			std::chrono::system_clock::now().time_since_epoch()).count()
+		)
+	);
+	nexus->rtp_header.seq_num = htons(nexus->seq_num++);
 
 	memcpy(result, &nexus->rtp_header, RTP_HLEN);
 	memcpy(result + sizeof(rtp_header_t), data, data_len);
