@@ -1,13 +1,10 @@
 #include <unordered_map>
 #include <unordered_set>
-#include <sstream>
 #include <vector>
 #include <random>
 #include <chrono>
 #include <mutex>
 #include <deque>
-
-
 #include <Winsock2.h>
 #include <stdint.h>
 #include <time.h>
@@ -16,6 +13,7 @@
 
 #include "tremont.h"
 
+#include <iomanip>
 #include <iostream>
 
 /*
@@ -24,29 +22,29 @@
 */
 
 class byte_stream {
-	private:
-		std::deque<byte> _data;
+private:
+	std::deque<byte> _data;
 
-	public:
-		void write(const byte* src, size_t size) {
-			for (size_t i = 0; i < size; i++) { _data.push_back(src[i]); }
+public:
+	void write(const byte* src, size_t size) {
+		for (size_t i = 0; i < size; i++) { _data.push_back(src[i]); }
+	}
+
+	int read(byte* dest, size_t n) {
+		size_t left_in_queue = _data.size();
+		size_t to_read = (n > left_in_queue) ? left_in_queue : n;
+
+		size_t i = 0;
+		for (; i < to_read; i++) {
+			dest[i] = _data.front();
+			_data.pop_front();
 		}
+		return static_cast<int>(i);
+	}
 
-		int read(byte* dest, size_t n) {
-			size_t left_in_queue = _data.size();
-			size_t to_read = (n > left_in_queue) ? left_in_queue : n;
-
-			size_t i = 0;
-			for (; i < to_read; i++) { 
-				dest[i] = _data.front(); 
-				_data.pop_front();
-			}
-			return static_cast<int>(i);
-		}
-
-		size_t size() {
-			return _data.size();
-		}
+	size_t size() {
+		return _data.size();
+	}
 };
 
 typedef uint32_t stream_id;
@@ -84,7 +82,7 @@ typedef struct _Stream {
 	block_id remote_block_id = 0;
 	block_id local_block_id = 0;
 
-	std::shared_ptr<std::atomic<uint8_t>> nonblocking = 
+	std::shared_ptr<std::atomic<uint8_t>> nonblocking =
 		std::make_shared<std::atomic<uint8_t>>(0);
 	std::shared_ptr<std::atomic<uint8_t>> ack_timeout =
 		std::make_shared<std::atomic<uint8_t>>(0);
@@ -97,7 +95,7 @@ typedef struct _Stream {
 } Stream;
 
 typedef struct _Nexus {
-	std::unordered_map<stream_id, char*> stream_auth;
+	std::unordered_map<stream_id, std::vector<byte>> stream_auth;
 	std::mutex stream_auth_mu;
 
 	std::unordered_set<stream_id> desired_streams;
@@ -113,12 +111,14 @@ typedef struct _Nexus {
 	std::condition_variable marked_streams_cv;
 
 	std::unordered_map<stream_id, Stream> streams;
+	std::mutex streams_mu;
 
 	std::unordered_map<stream_id, std::atomic<block_id>> ack_tracker;
 
 	rtp_header_t rtp_header = { 0 };
-	byte* key = NULL;
-	size_t key_len = 0;
+	
+	std::atomic<byte* > key = NULL;
+	std::atomic<size_t> key_len = 0;
 	uint32_t packet_size = 50;
 
 	SOCKET socket = NULL;
@@ -140,22 +140,20 @@ typedef struct {
 	uint32_t opcode;
 	stream_id s_id;
 	block_id b_id;
-	uint32_t padding;
+	uint32_t data_len;
 } data_pkt_t;
-
 #pragma pack(pop)
-
-
 
 int _init_nexus_thread(Nexus* nexus);
 void _send_stream_syn(stream_id id, sockaddr* addr, Nexus* nexus);
 void _send_stream_fin(stream_id id, Nexus* nexus);
-int _send_data_pkt(stream_id id, byte* buf, size_t buf_len, uint32_t padding, Nexus* nexus);
+int _send_data_pkt(stream_id id, byte* buf, size_t buf_len, Nexus* nexus);
 int _send_data_ack(stream_id s_id, block_id b_id, Nexus* nexus);
 int _send_syn_ack(stream_id s_id, Nexus* nexus);
 int _send_fin_ack(stream_id s_id, Nexus* nexus);
 bool _stream_exists(stream_id id, Nexus* nexus);
 void _fill_buffer_random(byte* buf, size_t len);
+void _xor_trans(byte* data, size_t len, Nexus* nexus);
 
 
 /*
@@ -214,8 +212,17 @@ int tremont_destroy_nexus(Nexus* nexus) {
 	return 0;
 }
 
-int tremont_auth_stream(tremont_stream_id id, char* buf, size_t buf_len, Tremont_Nexus* nexus) {
+int tremont_auth_stream(stream_id id, char* buf, size_t buf_len, Nexus* nexus) {
+	if (buf_len > nexus->packet_size - sizeof(rtp_header_t)) return -1;
 
+	std::lock_guard<std::mutex> auth_lock(nexus->stream_auth_mu);
+	nexus->stream_auth.emplace(id, std::vector<byte>(0));
+
+	for (int i = 0; i < buf_len; i++) {
+		nexus->stream_auth[id].push_back(buf[i]);
+	}
+
+	return 0;
 }
 
 
@@ -234,13 +241,13 @@ int tremont_req_stream(stream_id id, sockaddr* addr, uint32_t timeout, Nexus* ne
 
 	std::chrono::duration<uint32_t> _timeout(timeout);
 	bool fufilled_in_time;
-	
+
 	_send_stream_syn(id, addr, nexus);
 	fufilled_in_time = nexus->fufilled_streams_cv.wait_for(fufilled_streams_lock,
 		_timeout,
 		[&nexus, id] { return nexus->fufilled_streams.count(id) > 0; });
 	if (!fufilled_in_time) return -1;
-	
+
 	return 0;
 }
 
@@ -293,6 +300,7 @@ int tremont_streamopts(stream_id id, uint8_t opt, uint8_t new_val, Nexus* nexus)
 
 int tremont_send(stream_id id, byte* buf, size_t len, Nexus* nexus) {
 	if (!_stream_exists(id, nexus)) return -2;
+	std::lock_guard<std::mutex> streams_lock(nexus->streams_mu);
 
 	size_t len_left = len;
 	size_t max_payload_len = nexus->packet_size
@@ -300,9 +308,9 @@ int tremont_send(stream_id id, byte* buf, size_t len, Nexus* nexus) {
 
 	byte* reader_head = buf;
 	block_id cur_block;
-	
+
 	uint8_t timeout = *nexus->streams[id].ack_timeout;
-	
+
 	byte temp[2000];
 	while (len_left > 0) {
 		if (len_left > max_payload_len) {
@@ -312,26 +320,24 @@ int tremont_send(stream_id id, byte* buf, size_t len, Nexus* nexus) {
 
 			time_t start_time = time(NULL);
 			while (nexus->ack_tracker[id] != cur_block) {
-				_send_data_pkt(id, temp, max_payload_len, 0, nexus);
+				_send_data_pkt(id, temp, max_payload_len, nexus);
 				if (timeout != 0 &&
 					time(NULL) - start_time > timeout) {
 					return -1;
 				}
 			}
-			
+
 			reader_head += max_payload_len;
 			len_left -= max_payload_len;
 		}
 		else {
 			cur_block = ++nexus->streams[id].local_block_id;
 
-			uint32_t padding = (uint32_t)(max_payload_len - len_left);
 			memcpy(temp, reader_head, len_left);
-			_fill_buffer_random(temp + len_left, padding);
 
 			time_t start_time = time(NULL);
 			while (nexus->ack_tracker[id] != cur_block) {
-				_send_data_pkt(id, temp, max_payload_len, 0, nexus);
+				_send_data_pkt(id, temp, len_left, nexus);
 				if (timeout != 0 &&
 					time(NULL) - start_time > timeout) {
 					return -1;
@@ -347,11 +353,12 @@ int tremont_send(stream_id id, byte* buf, size_t len, Nexus* nexus) {
 
 int tremont_recv(stream_id id, byte* buf, size_t len, Nexus* nexus) {
 	if (!_stream_exists(id, nexus)) return -2;
+	std::lock_guard<std::mutex> streams_lock(nexus->streams_mu);
 
 	Stream* stream = &nexus->streams[id];
 	std::unique_lock<std::mutex> data_lock(*stream->data_from_mu);
 	stream->data_from_cv->wait(data_lock,
-		[stream, len] { return stream->data_from.size() > len; });
+		[stream, len] { return stream->data_from.size() >= len; });
 	int res = stream->data_from.read(buf, len);
 	return res;
 }
@@ -362,12 +369,12 @@ bool _stream_exists(stream_id id, Nexus* nexus) {
 
 /*
 	manages everthing
-	
+
 	when you send a packet and get back and ack, the nexus thread updates
 		the ack tracker
-	
+
 	when your thread sends a syn, the nexus does the rest of the negotiation
-	
+
 	its kinda like a parent who just gets whatever their kids want
 */
 
@@ -385,7 +392,7 @@ void _nexus_data_ack(byte* raw, int bytes_in, Nexus* nexus);
 void _nexus_syn(byte* raw, int bytes_in, sockaddr* remote_addr, Nexus* nexus);
 void _nexus_ctrl_ack(byte* raw, int bytes_in, sockaddr* remote_addr, Nexus* nexus);
 void _nexus_fin(byte* raw, int bytes_in, Nexus* nexus);
-void _nexus_xor_trans(byte* data, size_t len, Nexus* nexus);
+void _xor_trans(byte* data, size_t len, Nexus* nexus);
 void _set_blocking(SOCKET socket, bool mode);
 
 void _nexus_thread(Nexus* nexus) {
@@ -405,7 +412,7 @@ void _nexus_thread(Nexus* nexus) {
 			std::cerr << "Winsock err: " << WSAGetLastError() << std::endl;
 			return;
 		}
-		_nexus_xor_trans(data, bytes_in - RTP_HLEN, nexus);
+		_xor_trans(data, bytes_in - RTP_HLEN, nexus);
 		uint32_t opcode = (uint32_t)data[0];
 		switch (opcode) {
 		case DATA:
@@ -417,7 +424,7 @@ void _nexus_thread(Nexus* nexus) {
 		case SYN:
 			_nexus_syn(data, bytes_in, &remote_addr, nexus);
 			break;
-		case CTRL_ACK: 
+		case CTRL_ACK:
 			_nexus_ctrl_ack(data, bytes_in, &remote_addr, nexus);
 			break;
 		case FIN:
@@ -437,8 +444,6 @@ int _init_nexus_thread(Nexus* nexus) {
 	return 0;
 }
 
-
-
 void _nexus_data(byte* raw, int bytes_in, Nexus* nexus) {
 	data_pkt_t* data_pkt = (data_pkt_t*)raw;
 	if (nexus->streams.count(data_pkt->s_id) == 0) return;
@@ -447,11 +452,10 @@ void _nexus_data(byte* raw, int bytes_in, Nexus* nexus) {
 	if (data_pkt->b_id != stream->remote_block_id + 1) { return; }
 	_send_data_ack(data_pkt->s_id, data_pkt->b_id, nexus);
 	stream->remote_block_id++;
-	
+
 	std::unique_lock<std::mutex> stream_lock(*stream->data_from_mu);
 	byte* chunk = raw + sizeof(data_pkt_t);
-	size_t chunk_size = bytes_in - sizeof(rtp_header_t) 
-		- sizeof(data_pkt_t) - data_pkt->padding;
+	size_t chunk_size = data_pkt->data_len;
 	stream->data_from.write(chunk, chunk_size);
 	stream->data_from_cv->notify_all();
 }
@@ -462,7 +466,6 @@ typedef struct {
 	stream_id s_id;
 	block_id b_id;
 } data_ack_pkt_t;
-
 #pragma pack(pop)
 
 void _nexus_data_ack(byte* raw, int bytes_in, Nexus* nexus) {
@@ -477,19 +480,27 @@ void _nexus_data_ack(byte* raw, int bytes_in, Nexus* nexus) {
 typedef struct {
 	uint32_t opcode;
 	stream_id s_id;
-	uint32_t auth_size;
+	uint32_t auth_len;
 } syn_pkt_t;
-
 #pragma pack(pop)
 
 void _nexus_syn(byte* raw, int bytes_in, sockaddr* remote_addr, Nexus* nexus) {
 	syn_pkt_t* syn_pkt = (syn_pkt_t*)raw;
-	
+
+	std::lock_guard<std::mutex> auth_lock(nexus->stream_auth_mu);
+	if (nexus->stream_auth.count(syn_pkt->s_id) != 0) {
+		std::vector<byte>* auth = &nexus->stream_auth[syn_pkt->s_id];
+		if (!std::equal(auth->begin(), auth->end(),
+			raw + sizeof(syn_pkt_t)))
+			return;
+	}
+
 	std::unique_lock<std::mutex> d_streams_lock(nexus->desired_streams_mu);
 	if (nexus->desired_streams.count(syn_pkt->s_id) == 0) return;
 	nexus->desired_streams.erase(syn_pkt->s_id);
 	nexus->desired_streams_cv.notify_all();
 
+	std::lock_guard<std::mutex> streams_lock(nexus->streams_mu);
 	nexus->streams.emplace(syn_pkt->s_id, Stream());
 	Stream* new_stream = &nexus->streams[syn_pkt->s_id];
 
@@ -512,9 +523,7 @@ typedef struct {
 	uint32_t opcode;
 	uint32_t replying_opcode;
 	stream_id s_id;
-	uint32_t auth_size;
 } ctrl_ack_pkt_t;
-
 #pragma pack(pop)
 
 void _nexus_ctrl_ack(byte* raw, int bytes_in, sockaddr* remote_addr, Nexus* nexus) {
@@ -526,6 +535,7 @@ void _nexus_ctrl_ack(byte* raw, int bytes_in, sockaddr* remote_addr, Nexus* nexu
 		nexus->desired_streams.erase(ack_pkt->s_id);
 		nexus->desired_streams_cv.notify_all();
 
+		std::lock_guard<std::mutex> streams_lock(nexus->streams_mu);
 		nexus->streams.emplace(ack_pkt->s_id, Stream());
 		Stream* new_stream = &nexus->streams[ack_pkt->s_id];
 
@@ -540,6 +550,7 @@ void _nexus_ctrl_ack(byte* raw, int bytes_in, sockaddr* remote_addr, Nexus* nexu
 		nexus->fufilled_streams_cv.notify_all();
 	}
 	if (ack_pkt->replying_opcode == FIN) {
+		std::lock_guard<std::mutex> streams_lock(nexus->streams_mu);
 		if (nexus->streams.count(ack_pkt->s_id) == 0) return;
 		nexus->streams.erase(ack_pkt->s_id);
 	}
@@ -550,21 +561,22 @@ typedef struct {
 	uint32_t opcode;
 	stream_id s_id;
 } fin_pkt_t;
-
 #pragma pack(pop)
 
 void _nexus_fin(byte* raw, int bytes_in, Nexus* nexus) {
 	fin_pkt_t* fin_pkt = (fin_pkt_t*)raw;
+
+	std::lock_guard<std::mutex> streams_lock(nexus->streams_mu);
 	Stream* stream = &nexus->streams[fin_pkt->s_id];
 
 	nexus->streams.erase(fin_pkt->s_id);
 	_send_fin_ack(fin_pkt->s_id, nexus);
 }
 
-void _nexus_xor_trans(byte* data, size_t len, Nexus* nexus) {
+void _xor_trans(byte* data, size_t len, Nexus* nexus) {
 	if (nexus->key == NULL || nexus->key_len == 0) return;
 	for (size_t i = 0; i < len; i++) {
-		data[i] = data[i] ^ nexus->key[i % nexus->key_len];
+		data[i] ^= nexus->key[i % nexus->key_len];
 	}
 }
 
@@ -584,16 +596,20 @@ void _fill_buffer_random(byte* buf, size_t len) {
 }
 
 char* _craft_rtp_pkt(byte* data, size_t data_len, size_t* res_size_out, Nexus* nexus) {
-	*res_size_out = data_len + sizeof(rtp_header_t);
+	size_t packing = nexus->packet_size - sizeof(rtp_header_t) - data_len;
+	*res_size_out = sizeof(rtp_header_t) + data_len + packing;
 	byte* result = (byte*)malloc(*res_size_out);
 	if (result == NULL) return NULL;
 
 	memcpy(result, &nexus->rtp_header, RTP_HLEN);
-	memcpy(result + sizeof(nexus->rtp_header), data, data_len);
+	memcpy(result + sizeof(rtp_header_t), data, data_len);
+	_fill_buffer_random(result + 
+		sizeof(rtp_header_t) +
+		data_len, packing);
 
-	_nexus_xor_trans(result + sizeof(rtp_header_t), data_len,
+	_xor_trans(result + sizeof(rtp_header_t), data_len,
 		nexus);
-	
+
 	return (char*)result;
 }
 
@@ -601,15 +617,27 @@ void _send_stream_syn(stream_id id, sockaddr* addr, Nexus* nexus) {
 	syn_pkt_t p;
 	p.opcode = SYN;
 	p.s_id = id;
+	
+	std::lock_guard<std::mutex> auth_lock(nexus->stream_auth_mu);
+	if (nexus->stream_auth.count(id) == 0) p.auth_len = 0;
+	else p.auth_len = static_cast<uint32_t>(nexus->stream_auth[id].size());
+
+	size_t temp_size;
+	if (p.auth_len == 0) temp_size = sizeof(syn_pkt_t);
+	else temp_size = sizeof(syn_pkt_t) + p.auth_len;
+
+	byte* temp = (byte*)malloc(temp_size);
+	memcpy(temp, &p, sizeof(syn_pkt_t));
+	if (p.auth_len != 0)
+		std::copy(nexus->stream_auth[id].begin(),
+			nexus->stream_auth[id].end(),
+			temp + sizeof(syn_pkt_t));
+
+
+	size_t rtp_pkt_len;
+	char* rtp_pkt = _craft_rtp_pkt(temp, temp_size, &rtp_pkt_len, nexus);
 
 	std::lock_guard<std::mutex> sock_lock(nexus->socket_mu);
-	sockaddr remote_addr;
-	int remote_addr_len = sizeof(remote_addr);
-	
-	size_t rtp_pkt_len;
-	char* rtp_pkt = _craft_rtp_pkt((byte*)&p, sizeof(syn_pkt_t),
-		&rtp_pkt_len, nexus);
-	
 	int res = sendto(nexus->socket, rtp_pkt, static_cast<int>(rtp_pkt_len), 0,
 		addr, sizeof(sockaddr));
 
@@ -637,7 +665,7 @@ void _send_stream_fin(stream_id id, Nexus* nexus) {
 }
 
 int _send_data_pkt(stream_id id, byte* buf,
-		size_t buf_len, uint32_t padding, Nexus* nexus) {
+	size_t buf_len, Nexus* nexus) {
 
 	std::lock_guard<std::mutex> sock_lock(nexus->socket_mu);
 
@@ -645,23 +673,21 @@ int _send_data_pkt(stream_id id, byte* buf,
 	p.opcode = DATA;
 	p.s_id = id;
 	p.b_id = nexus->streams[id].local_block_id;
-	p.padding = padding;
+	p.data_len = static_cast<uint32_t>(buf_len);
 
-	size_t offset = 0;
 	size_t temp_size = sizeof(data_pkt_t) + buf_len;
+
 	byte* temp = (byte*)malloc(temp_size);
 	if (temp == NULL) return -1;
 
-	memcpy(temp + offset, &p, sizeof(data_pkt_t));
-	offset += sizeof(data_pkt_t);
-
-	memcpy(temp + offset, buf, buf_len);
+	memcpy(temp, &p, sizeof(data_pkt_t));
+	memcpy(temp + sizeof(data_pkt_t), buf, buf_len);
 
 	size_t rtp_pkt_len;
 	char* rtp_pkt = _craft_rtp_pkt(temp, temp_size, &rtp_pkt_len, nexus);
 
 	Stream* stream = &nexus->streams[id];
-	
+
 	int res = sendto(nexus->socket, rtp_pkt, static_cast<int>(rtp_pkt_len), 0,
 		&stream->remote_addr, stream->remote_addr_len);
 
