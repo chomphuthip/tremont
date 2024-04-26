@@ -37,7 +37,7 @@ int main() {
         std::cin.get();
         return 1;
     }
-    
+
     //bind the socket
     int bindResult = bind(sock, result->ai_addr, (int)result->ai_addrlen);
     if (bindResult == SOCKET_ERROR) {
@@ -57,6 +57,9 @@ int main() {
         std::cin.get();
         return 1;
     }
+    
+    char key[] = "lets learn about IELR(1) parser generators";
+    tremont_key_nexus(key, 43, nexus);
 
     //bind nexus to the socket
     res = tremont_bind_nexus(sock, nexus);
@@ -67,17 +70,10 @@ int main() {
     }
     std::cout << "Nexus bound!" << std::endl;
 
-    char key[] = "lets learn about IELR(1) parser generators";
-    tremont_key_nexus(key, 43, nexus);
+    char password[] = "let me in";
+    tremont_auth_stream(9999, password, 10, nexus);
 
     //accept a stream request
-    res = 1;
-    /*
-    while (res != 0) {
-        std::cout << "Accepting a stream..." << std::endl;
-        res = tremont_accept_stream(9999, 5, nexus);
-    }
-    */
     tremont_accept_stream(9999, 0, nexus);
     std::cout << "Connected!" << std::endl;
 
