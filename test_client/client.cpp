@@ -50,13 +50,16 @@ int main() {
     //init nexus
     Tremont_Nexus* nexus = 0;
     int res = 0;
-    
+
     res = tremont_init_nexus(&nexus);
     if (res != 0) {
         std::cerr << "couldn't init nexus" << std::endl;
         std::cin.get();
         return 1;
     }
+
+    char key[] = "lets learn about IELR(1) parser generators";
+    tremont_key_nexus(key, 43, nexus);
 
     //bind nexus to port
     res = tremont_bind_nexus(sock, nexus);
@@ -68,11 +71,8 @@ int main() {
 
     std::cout << "Nexus bound!" << std::endl;
 
-    char key[] = "lets learn about IELR(1) parser generators";
-    tremont_key_nexus(key, 43, nexus);
-
     //get remote addrinfo
-    struct addrinfo remote_hint, *remote_info;
+    struct addrinfo remote_hint, * remote_info;
     memset(&remote_hint, 0, sizeof(remote_hint));
     remote_hint.ai_family = AF_INET;
     remote_hint.ai_socktype = SOCK_DGRAM;
@@ -83,6 +83,9 @@ int main() {
         std::cin.get();
         return 1;
     }
+
+    char password[] = "let me in";
+    tremont_auth_stream(9999, password, 10, nexus);
 
     //request the stream
     res = tremont_req_stream(9999, remote_info->ai_addr, 0, nexus);
