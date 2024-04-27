@@ -1,4 +1,4 @@
-# tremont
+# Tremont
 
 Tremont is a simple C++ library that uses RTP to reliably send obfuscated data.
 
