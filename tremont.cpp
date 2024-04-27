@@ -117,8 +117,7 @@ typedef struct _Nexus {
 
 	rtp_header_t rtp_header = { 0, 0, 2, 0, 0, 98, 1, 0, 99 };
 	
-	std::atomic<byte* > key = NULL;
-	std::atomic<size_t> key_len = 0;
+	std::vector<byte> key;
 	uint32_t packet_size = 50;
 
 	SOCKET socket = NULL;
@@ -183,8 +182,8 @@ int tremont_rtp_nexus(rtp_header_t* rtp_header, Nexus* nexus) {
 }
 
 int tremont_key_nexus(char* key, size_t key_len, Nexus* nexus) {
-	nexus->key = (byte*)key;
-	nexus->key_len = key_len;
+	nexus->key.resize(key_len);
+	memcpy(nexus->key.data(), key, key_len);
 	return 0;
 }
 
@@ -213,8 +212,9 @@ int tremont_newid_nexus(stream_id* new_id, Nexus* nexus) {
 	return 0;
 }
 
-int tremont_verifyid_nexus(stream_id* id, Nexus* nexus) {
-	return (nexus->streams.count(*id) > 0) ? -1 : 0;
+int tremont_verifyid_nexus(stream_id id, Nexus* nexus) {
+	std::lock_guard<std::mutex> streams_lock(nexus->streams_mu);
+	return (nexus->streams.count(id) > 0) ? -1 : 0;
 }
 
 int tremont_destroy_nexus(Nexus* nexus) {
@@ -231,10 +231,16 @@ int tremont_auth_stream(stream_id id, char* buf, size_t buf_len, Nexus* nexus) {
 	std::lock_guard<std::mutex> auth_lock(nexus->stream_auth_mu);
 	nexus->stream_auth.emplace(id, std::vector<byte>(0));
 
-	for (int i = 0; i < buf_len; i++) {
-		nexus->stream_auth[id].push_back(buf[i]);
-	}
+	nexus->stream_auth[id].resize(buf_len);
+	memcpy(nexus->stream_auth[id].data(), buf, buf_len);
 
+	return 0;
+}
+
+
+int tremont_getaddr_stream(stream_id id, sockaddr* dest, Nexus* nexus) {
+	std::lock_guard<std::mutex> streams_lock(nexus->streams_mu);
+	memcpy(dest, &nexus->streams[id].remote_addr, sizeof(sockaddr));
 	return 0;
 }
 
@@ -294,7 +300,7 @@ int tremont_end_stream(stream_id id, Nexus* nexus) {
 	return 0;
 }
 
-int tremont_streamopts(stream_id id, uint8_t opt, uint8_t new_val, Nexus* nexus) {
+int tremont_opts_stream(stream_id id, uint8_t opt, uint8_t new_val, Nexus* nexus) {
 	Stream* stream = &nexus->streams[id];
 	switch (opt) {
 	case OPT_TIMEOUT:
@@ -308,6 +314,14 @@ int tremont_streamopts(stream_id id, uint8_t opt, uint8_t new_val, Nexus* nexus)
 		return -1;
 	}
 	return -1;
+}
+
+int tremont_poll_stream(stream_id id, Nexus* nexus) {
+	std::lock_guard<std::mutex> streams_lock(nexus->streams_mu);
+	if (!_stream_exists(id, nexus)) return -1;
+
+	std::lock_guard<std::mutex> data_lock(*nexus->streams[id].data_from_mu);
+	return static_cast<int>(nexus->streams[id].data_from.size());
 }
 
 
@@ -369,11 +383,14 @@ int tremont_recv(stream_id id, byte* buf, size_t len, Nexus* nexus) {
 	std::lock_guard<std::mutex> streams_lock(nexus->streams_mu);
 
 	Stream* stream = &nexus->streams[id];
+
 	std::unique_lock<std::mutex> data_lock(*stream->data_from_mu);
+	if (*stream->nonblocking == 1) {
+		return stream->data_from.read(buf, len);
+	}
 	stream->data_from_cv->wait(data_lock,
 		[stream, len] { return stream->data_from.size() >= len; });
-	int res = stream->data_from.read(buf, len);
-	return res;
+	return stream->data_from.read(buf, len);
 }
 
 bool _stream_exists(stream_id id, Nexus* nexus) {
@@ -587,9 +604,10 @@ void _nexus_fin(byte* raw, int bytes_in, Nexus* nexus) {
 }
 
 void _xor_trans(byte* data, size_t len, Nexus* nexus) {
-	if (nexus->key == NULL || nexus->key_len == 0) return;
+	size_t key_len = nexus->key.size();
+	if (key_len == 0) return;
 	for (size_t i = 0; i < len; i++) {
-		data[i] ^= nexus->key[i % nexus->key_len];
+		data[i] = data[i] ^ nexus->key[i % key_len];
 	}
 }
 
@@ -627,7 +645,7 @@ char* _craft_rtp_pkt(byte* data, size_t data_len, size_t* res_size_out, Nexus* n
 		sizeof(rtp_header_t) +
 		data_len, packing);
 
-	_xor_trans(result + sizeof(rtp_header_t), data_len,
+	_xor_trans(result + RTP_HLEN, data_len,
 		nexus);
 
 	return (char*)result;
