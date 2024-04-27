@@ -266,6 +266,7 @@ int tremont_req_stream(stream_id id, sockaddr* addr, uint32_t timeout, Nexus* ne
 		_timeout,
 		[&nexus, id] { return nexus->fufilled_streams.count(id) > 0; });
 	if (!fufilled_in_time) return -1;
+	nexus->fufilled_streams.erase(id);
 
 	return 0;
 }
@@ -428,21 +429,27 @@ void _set_blocking(SOCKET socket, bool mode);
 void _nexus_thread(Nexus* nexus) {
 	char buffer[MAX_RECV];
 	byte* data = (byte*)(buffer + RTP_HLEN);
+	
 	sockaddr remote_addr;
 	int remote_addr_len = sizeof(sockaddr);
 	ZeroMemory(&remote_addr, remote_addr_len);
-	int bytes_in;
+	
 	_set_blocking(nexus->socket, false);
+	int bytes_in;
+
+	WSAPOLLFD poll_fd;
+	poll_fd.fd = nexus->socket;
+	poll_fd.events = POLLRDNORM;
+	poll_fd.revents = 0;
 
 	while (nexus->thread_ctrl == 0x1) {
+		if (WSAPoll(&poll_fd, 1, 1) == 0) continue;
+		
 		bytes_in = recvfrom(nexus->socket, buffer, MAX_RECV, 0,
 			&remote_addr, &remote_addr_len);
-		if (bytes_in < 0) {
-			if (WSAGetLastError() == WSAEWOULDBLOCK) { continue; }
-			std::cerr << "Winsock err: " << WSAGetLastError() << std::endl;
-			return;
-		}
+		
 		_xor_trans(data, bytes_in - RTP_HLEN, nexus);
+		
 		uint32_t opcode = (uint32_t)data[0];
 		switch (opcode) {
 		case DATA:
@@ -679,6 +686,7 @@ void _send_stream_syn(stream_id id, sockaddr* addr, Nexus* nexus) {
 	int res = sendto(nexus->socket, rtp_pkt, static_cast<int>(rtp_pkt_len), 0,
 		addr, sizeof(sockaddr));
 
+	free(temp);
 	free(rtp_pkt);
 }
 
