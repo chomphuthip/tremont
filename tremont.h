@@ -101,7 +101,7 @@ extern "C" {
 	/*
 		Registers a callback that takes a tremont_cb_param struct.
 	*/
-	int tremont_cb_stream(tremont_stream_id id, tremont_cb cb, Tremont_Nexus* nexus);
+	int tremont_cb_stream(tremont_stream_id id, tremont_cb cb, void* params, Tremont_Nexus* nexus);
 
 	/*
 		Returns a pointer to the remote addr of a stream

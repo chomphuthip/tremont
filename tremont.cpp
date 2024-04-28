@@ -102,7 +102,7 @@ typedef struct _Nexus {
 	std::mutex desired_streams_mu;
 	std::condition_variable desired_streams_cv;
 
-	std::unordered_map<stream_id, tremont_cb> cb_table;
+	std::unordered_map<stream_id, std::pair<tremont_cb,void*>> cb_table;
 	std::mutex cb_table_mu;
 	std::condition_variable cb_table_cv;
 
@@ -301,9 +301,11 @@ int tremont_accept_stream(stream_id id, uint32_t timeout, Nexus* nexus) {
 
 int tremont_cb_stream(stream_id id,
 					  tremont_cb cb,
+					  void* param,
 					  Tremont_Nexus* nexus) {
 	std::lock_guard<std::mutex> cb_table_lock(nexus->cb_table_mu);
-	nexus->cb_table[id] = cb;
+	nexus->cb_table.emplace(id,
+		std::pair<tremont_cb, void*>(cb, param));
 	return 0;
 }
 
@@ -572,7 +574,8 @@ void _nexus_syn(byte* raw, int bytes_in, sockaddr* remote_addr, Nexus* nexus) {
 	if (nexus->cb_table.count(syn_pkt->s_id) < 0) {
 		struct tremont_cb_param param;
 		param.stream_id = syn_pkt->s_id;
-		nexus->cb_table[syn_pkt->s_id](&param);
+		param.params = nexus->cb_table[syn_pkt->s_id].second;
+		nexus->cb_table[syn_pkt->s_id].first(&param);
 	}
 }
 
@@ -611,7 +614,8 @@ void _nexus_ctrl_ack(byte* raw, int bytes_in, sockaddr* remote_addr, Nexus* nexu
 		if (nexus->cb_table.count(ack_pkt->s_id) < 0) {
 			struct tremont_cb_param param;
 			param.stream_id = ack_pkt->s_id;
-			nexus->cb_table[ack_pkt->s_id](&param);
+			param.params = nexus->cb_table[ack_pkt->s_id].second;
+			nexus->cb_table[ack_pkt->s_id].first(&param);
 		}
 	}
 	if (ack_pkt->replying_opcode == FIN) {
