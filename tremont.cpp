@@ -102,6 +102,10 @@ typedef struct _Nexus {
 	std::mutex desired_streams_mu;
 	std::condition_variable desired_streams_cv;
 
+	std::unordered_map<stream_id, tremont_cb> cb_table;
+	std::mutex cb_table_mu;
+	std::condition_variable cb_table_cv;
+
 	std::unordered_set<stream_id> fufilled_streams;
 	std::mutex fufilled_streams_mu;
 	std::condition_variable fufilled_streams_cv;
@@ -290,9 +294,19 @@ int tremont_accept_stream(stream_id id, uint32_t timeout, Nexus* nexus) {
 		_timeout,
 		[&nexus, id] { return nexus->fufilled_streams.count(id) > 0; });
 	if (!fufilled_in_time) return -1;
+	nexus->fufilled_streams.erase(id);
 
 	return 0;
 }
+
+int tremont_cb_stream(stream_id id,
+					  tremont_cb cb,
+					  Tremont_Nexus* nexus) {
+	std::lock_guard<std::mutex> cb_table_lock(nexus->cb_table_mu);
+	nexus->cb_table[id] = cb;
+	return 0;
+}
+
 
 int tremont_end_stream(stream_id id, Nexus* nexus) {
 	std::lock_guard<std::mutex> lock(nexus->marked_streams_mu);
@@ -433,14 +447,14 @@ void _nexus_thread(Nexus* nexus) {
 	sockaddr remote_addr;
 	int remote_addr_len = sizeof(sockaddr);
 	ZeroMemory(&remote_addr, remote_addr_len);
-	
-	_set_blocking(nexus->socket, false);
-	int bytes_in;
 
 	WSAPOLLFD poll_fd;
 	poll_fd.fd = nexus->socket;
 	poll_fd.events = POLLRDNORM;
 	poll_fd.revents = 0;
+
+	int bytes_in;
+	_set_blocking(nexus->socket, false);
 
 	while (nexus->thread_ctrl == 0x1) {
 		if (WSAPoll(&poll_fd, 1, 1) == 0) continue;
@@ -553,6 +567,13 @@ void _nexus_syn(byte* raw, int bytes_in, sockaddr* remote_addr, Nexus* nexus) {
 	std::unique_lock<std::mutex> f_streams_lock(nexus->fufilled_streams_mu);
 	nexus->fufilled_streams.insert(syn_pkt->s_id);
 	nexus->fufilled_streams_cv.notify_all();
+
+	std::unique_lock<std::mutex> cb_table_lock(nexus->cb_table_mu);
+	if (nexus->cb_table.count(syn_pkt->s_id) < 0) {
+		struct tremont_cb_param param;
+		param.stream_id = syn_pkt->s_id;
+		nexus->cb_table[syn_pkt->s_id](&param);
+	}
 }
 
 #pragma pack(push, 1)
@@ -585,6 +606,13 @@ void _nexus_ctrl_ack(byte* raw, int bytes_in, sockaddr* remote_addr, Nexus* nexu
 		std::lock_guard<std::mutex> f_streams_lock(nexus->fufilled_streams_mu);
 		nexus->fufilled_streams.insert(ack_pkt->s_id);
 		nexus->fufilled_streams_cv.notify_all();
+
+		std::unique_lock<std::mutex> cb_table_lock(nexus->cb_table_mu);
+		if (nexus->cb_table.count(ack_pkt->s_id) < 0) {
+			struct tremont_cb_param param;
+			param.stream_id = ack_pkt->s_id;
+			nexus->cb_table[ack_pkt->s_id](&param);
+		}
 	}
 	if (ack_pkt->replying_opcode == FIN) {
 		std::lock_guard<std::mutex> streams_lock(nexus->streams_mu);

@@ -92,6 +92,17 @@ extern "C" {
 	*/
 	int tremont_accept_stream(tremont_stream_id id, uint32_t timeout, Tremont_Nexus* nexus);
 
+
+	struct tremont_cb_param {
+		tremont_stream_id stream_id;
+		void* params;
+	};
+	typedef void (*tremont_cb)(struct tremont_cb_param* param);
+	/*
+		Registers a callback that takes a tremont_cb_param struct.
+	*/
+	int tremont_cb_stream(tremont_stream_id id, tremont_cb cb, Tremont_Nexus* nexus);
+
 	/*
 		Returns a pointer to the remote addr of a stream
 	*/
