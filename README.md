@@ -11,6 +11,6 @@ S/RTP has some interesting properties that make it a strong choice for offensive
 * ***High Throughput***: RTP sending H.265 video frames has packets up to 1440 bytes long, sending multiple frames a second. Unlike HTTP, where file transfers can be uniquely identified from a bigger traffic capture, RTP is a consistant stream of a packets with a fixed size.
 
 ## Usage
-Check out the [PowerDial controller](https://github.com/chomphuthip/powerdial/blob/main/main.c) and [implant](https://github.com/chomphuthip/powerdial/blob/main/implant.c) if you're looking for practical examples. 
+Check out the [PowerDial](https://github.com/chomphuthip/powerdial) [controller](https://github.com/chomphuthip/powerdial/blob/main/main.c) and [implant](https://github.com/chomphuthip/powerdial/blob/main/implant.c) if you're looking for practical examples. 
 
 If you just want a brief overview of the API, `tremont.h` is super concise and should take you less than a minute to read. 
