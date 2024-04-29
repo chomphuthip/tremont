@@ -191,6 +191,13 @@ int tremont_key_nexus(char* key, size_t key_len, Nexus* nexus) {
 	return 0;
 }
 
+int tremont_getkey_nexus(char** key_ptr, size_t* key_len, Nexus* nexus) {
+	if (nexus->key.size() == 0) return -1;
+	*key_ptr = (char*)nexus->key.data();
+	*key_len = nexus->key.size();
+	return 0;
+}
+
 int tremont_bind_nexus(SOCKET sock, Nexus* nexus) {
 	nexus->socket = sock;
 	nexus->thread_ctrl = 0x1;
@@ -299,16 +306,28 @@ int tremont_accept_stream(stream_id id, uint32_t timeout, Nexus* nexus) {
 	return 0;
 }
 
+int tremont_desire_stream(stream_id id, Nexus* nexus) {
+	std::lock_guard<std::mutex> desired_streams_lock(nexus->desired_streams_mu);
+	nexus->desired_streams.insert(id);
+	return 0;
+}
+
 int tremont_cb_stream(stream_id id,
 					  tremont_cb cb,
 					  void* param,
-					  Tremont_Nexus* nexus) {
+					  Nexus* nexus) {
 	std::lock_guard<std::mutex> cb_table_lock(nexus->cb_table_mu);
 	nexus->cb_table.emplace(id,
 		std::pair<tremont_cb, void*>(cb, param));
 	return 0;
 }
 
+int tremont_rmcb_stream(stream_id id, Nexus* nexus) {
+	std::lock_guard<std::mutex> cb_table_lock(nexus->cb_table_mu);
+	free(nexus->cb_table[id].second);
+	nexus->cb_table.erase(id);
+	return 0;
+}
 
 int tremont_end_stream(stream_id id, Nexus* nexus) {
 	std::lock_guard<std::mutex> lock(nexus->marked_streams_mu);
@@ -571,11 +590,14 @@ void _nexus_syn(byte* raw, int bytes_in, sockaddr* remote_addr, Nexus* nexus) {
 	nexus->fufilled_streams_cv.notify_all();
 
 	std::unique_lock<std::mutex> cb_table_lock(nexus->cb_table_mu);
-	if (nexus->cb_table.count(syn_pkt->s_id) < 0) {
+	if (nexus->cb_table.count(syn_pkt->s_id) > 0) {
 		struct tremont_cb_param param;
 		param.stream_id = syn_pkt->s_id;
 		param.params = nexus->cb_table[syn_pkt->s_id].second;
 		nexus->cb_table[syn_pkt->s_id].first(&param);
+
+		nexus->cb_table.erase(syn_pkt->s_id);
+		free(param.params);
 	}
 }
 
@@ -616,6 +638,9 @@ void _nexus_ctrl_ack(byte* raw, int bytes_in, sockaddr* remote_addr, Nexus* nexu
 			param.stream_id = ack_pkt->s_id;
 			param.params = nexus->cb_table[ack_pkt->s_id].second;
 			nexus->cb_table[ack_pkt->s_id].first(&param);
+
+			nexus->cb_table.erase(ack_pkt->s_id);
+			free(param.params);
 		}
 	}
 	if (ack_pkt->replying_opcode == FIN) {

@@ -40,6 +40,12 @@ extern "C" {
 	int tremont_key_nexus(char* key, size_t key_len, Tremont_Nexus* nexus);
 
 	/*
+		Sets key_ptr to the location of the key
+		Sets key_len to the size of the key
+	*/
+	int tremont_getkey_nexus(char** key_ptr, size_t* key_len, Tremont_Nexus* nexus);
+
+	/*
 		Binds a nexus to a UDP socket.
 	*/
 	int tremont_bind_nexus(SOCKET sock, Tremont_Nexus* nexus);
@@ -92,16 +98,33 @@ extern "C" {
 	*/
 	int tremont_accept_stream(tremont_stream_id id, uint32_t timeout, Tremont_Nexus* nexus);
 
+	/*
+		Marks the stream as desired, but does not block or timeout.
+		Usually used when setting up callbacks.
+	*/
+	int tremont_desire_stream(tremont_stream_id id, Tremont_Nexus* nexus);
 
+	/*
+		Registers a callback that takes a tremont_cb_param struct.
+		Callback is called upon establishing a stream with the matching stream id.
+		Callback is unregistered after call.
+
+		-- ALLOCATE PARAMS USING MALLOC --
+		Tremont will call free(3) on params.
+	*/
 	struct tremont_cb_param {
 		tremont_stream_id stream_id;
 		void* params;
 	};
 	typedef void (*tremont_cb)(struct tremont_cb_param* param);
-	/*
-		Registers a callback that takes a tremont_cb_param struct.
-	*/
 	int tremont_cb_stream(tremont_stream_id id, tremont_cb cb, void* params, Tremont_Nexus* nexus);
+	
+	/*
+		Removes the callback associated with the stream_id.
+		Will also attempt to free params.
+	*/
+	int tremont_rmcb_stream(tremont_stream_id id, Tremont_Nexus* nexus);
+
 
 	/*
 		Returns a pointer to the remote addr of a stream
