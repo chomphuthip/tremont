@@ -109,7 +109,7 @@ extern "C" {
 		Callback is called upon establishing a stream with the matching stream id.
 		Callback is unregistered after call.
 
-		-- ALLOCATE PARAMS USING MALLOC --
+		-- ALLOCATE PARAMS USING CALLOC/MALLOC --
 		Tremont will call free(3) on params.
 	*/
 	struct tremont_cb_param {
